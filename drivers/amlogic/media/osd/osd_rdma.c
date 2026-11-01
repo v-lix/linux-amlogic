@@ -160,6 +160,11 @@ static inline void reset_rdma_table(void)
 			old_count = (end_addr - table_paddr) >> 3;
 		else
 			old_count = 0;
+#ifdef CONFIG_AMLOGIC_MEDIA_RDMA
+		/* diagnostic: the entries the last trigger executed */
+		rdma_trace_table(osd_rdma_handle, (const u32 *)rdma_table,
+				 min(old_count, item_count));
+#endif
 		osd_reg_write(END_ADDR, table_paddr - 1);
 
 		for (i = (int)(item_count - 1);

@@ -76,4 +76,19 @@ void rdma_frame_tracking(int handle);
 u64 rdma_frame_begin(int handle);
 void rdma_frame_end(int handle, u64 serial, u64 cookie, bool keep_pending);
 u64 rdma_frame_completed(int handle);
+/* Optional diagnostic: called in the RDMA IRQ for every completed channel,
+ * before its irq_cb, with the table length the channel's AHB start/end
+ * registers describe. NULL detaches it. Observation only.
+ */
+void rdma_set_done_trace(void (*fn)(int handle, void *irq_cb, u32 items));
+/* Optional diagnostic: called with a channel's (address, value) pairs,
+ * from rdma_config() when a table is committed for the next trigger
+ * (executed false), and via rdma_trace_table() by a driver that builds its
+ * own table (executed true: the entries already ran). NULL detaches it.
+ * Observation only.
+ */
+void rdma_set_config_trace(void (*fn)(int handle, void *irq_cb,
+				      const u32 *table, u32 items,
+				      bool executed));
+void rdma_trace_table(int handle, const u32 *table, u32 items);
 #endif

@@ -90,4 +90,10 @@ extern unsigned int canvas_get_width(u32 index);
 
 extern unsigned int canvas_get_height(u32 index);
 
+/* Optional diagnostic: called under the canvas lock for every LUT write
+ * request; same: the entry already holds these values; written: the
+ * hardware was written. NULL detaches it. Observation only.
+ */
+void canvas_set_write_trace(void (*fn)(u32 index, bool same, bool written));
+
 #endif /* CANVAS_H */

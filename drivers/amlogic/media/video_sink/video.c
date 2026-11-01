@@ -101,6 +101,7 @@ MODULE_AMLOG(LOG_LEVEL_ERROR, 0, LOG_DEFAULT_LEVEL_DESC, LOG_MASK_DESC);
 #include <linux/math64.h>
 #include <linux/fence.h>
 #include "video_receiver.h"
+#include "video_tear_trace.h"
 #define CREATE_TRACE_POINTS
 #include "video_trace.h"
 #undef TRACE_INCLUDE_PATH
@@ -4924,6 +4925,8 @@ static irqreturn_t vsync_isr_in(int irq, void *dev_id)
 
 	do_gettimeofday(&start);
 	enc_line_start = get_cur_enc_line();
+	if (unlikely(tear_trace_on))
+		tear_trace_isr_enter(enc_line_start);
 	end1 = start;
 	end2 = start;
 	end3 = start;
@@ -7002,6 +7005,8 @@ RUN_FIRST_RDMA:
 	enc_line = get_cur_enc_line();
 	if (enc_line > vsync_exit_line_max)
 		vsync_exit_line_max = enc_line;
+	if (unlikely(tear_trace_on))
+		tear_trace_isr_exit(enc_line, over_sync);
 	if (video_suspend)
 		video_suspend_cycle++;
 #ifdef FIQ_VSYNC
@@ -12317,6 +12322,29 @@ static ssize_t performance_debug_store(
 	return count;
 }
 
+static ssize_t tear_trace_show(
+	struct class *cla,
+	struct class_attribute *attr,
+	char *buf)
+{
+	return tear_trace_read(buf, PAGE_SIZE);
+}
+
+static ssize_t tear_trace_store(
+	struct class *cla,
+	struct class_attribute *attr,
+	const char *buf, size_t count)
+{
+	int ret;
+	int enable;
+
+	ret = kstrtoint(buf, 0, &enable);
+	if (ret < 0)
+		return -EINVAL;
+	tear_trace_set(enable != 0);
+	return count;
+}
+
 static ssize_t over_sync_count_show(
 	struct class *cla,
 	struct class_attribute *attr,
@@ -13277,6 +13305,10 @@ static struct class_attribute amvideo_class_attrs[] = {
 	       0664,
 	       over_sync_count_show,
 	       NULL),
+	__ATTR(tear_trace,
+	       0664,
+	       tear_trace_show,
+	       tear_trace_store),
 	__ATTR(pps_coefs,
 	       0664,
 	       NULL,

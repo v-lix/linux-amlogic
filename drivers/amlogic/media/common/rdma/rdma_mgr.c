@@ -462,6 +462,39 @@ u64 rdma_frame_completed(int handle)
 }
 EXPORT_SYMBOL(rdma_frame_completed);
 
+static void (*rdma_done_trace)(int handle, void *irq_cb, u32 items);
+
+void rdma_set_done_trace(void (*fn)(int handle, void *irq_cb, u32 items))
+{
+	WRITE_ONCE(rdma_done_trace, fn);
+}
+EXPORT_SYMBOL(rdma_set_done_trace);
+
+static void (*rdma_config_trace)(int handle, void *irq_cb, const u32 *table,
+				 u32 items, bool executed);
+
+void rdma_set_config_trace(void (*fn)(int handle, void *irq_cb,
+				      const u32 *table, u32 items,
+				      bool executed))
+{
+	WRITE_ONCE(rdma_config_trace, fn);
+}
+EXPORT_SYMBOL(rdma_set_config_trace);
+
+void rdma_trace_table(int handle, const u32 *table, u32 items)
+{
+	void (*trace)(int handle, void *irq_cb, const u32 *table, u32 items,
+		      bool executed) = READ_ONCE(rdma_config_trace);
+	struct rdma_instance_s *ins;
+
+	if (!trace || handle < 0 || handle >= RDMA_NUM)
+		return;
+	ins = &rdma_info.rdma_ins[handle];
+	trace(handle, ins->op ? (void *)ins->op->irq_cb : NULL, table, items,
+	      true);
+}
+EXPORT_SYMBOL(rdma_trace_table);
+
 static int rdma_isr_count;
 irqreturn_t rdma_mgr_isr(int irq, void *dev_id)
 {
@@ -491,6 +524,18 @@ QUERY:
 			continue;
 #endif
 		if (rdma_status & (1 << ins->rdma_regadr->irq_status_bitpos)) {
+			void (*trace)(int handle, void *irq_cb, u32 items) =
+				READ_ONCE(rdma_done_trace);
+
+			if (trace) {
+				u32 start = READ_VCBUS_REG(
+					ins->rdma_regadr->rdma_ahb_start_addr);
+				u32 end = READ_VCBUS_REG(
+					ins->rdma_regadr->rdma_ahb_end_addr);
+
+				trace(i, ins->op ? (void *)ins->op->irq_cb : NULL,
+				      end >= start ? (end - start + 1) / 8 : 0);
+			}
 			if (debug_flag & 2)
 				pr_info("%s: process %d\r\n", __func__, i);
 
@@ -648,6 +693,17 @@ int rdma_config(int handle, int trigger_type)
 				rdma_meson_dev.trigger_mask_len);
 		memcpy(ins->rdma_table_addr, ins->reg_buf,
 			ins->rdma_item_count * 2 * sizeof(u32));
+		{
+			void (*trace)(int handle, void *irq_cb,
+				      const u32 *table, u32 items,
+				      bool executed) =
+				READ_ONCE(rdma_config_trace);
+
+			if (trace && trigger_type > 0)
+				trace(handle, (void *)ins->op->irq_cb,
+				      ins->reg_buf, ins->rdma_item_count,
+				      false);
+		}
 
 		if (trigger_type > 0 && trigger_type <= RDMA_TRIGGER_MANUAL) {
 			/* A late old-table status during configuration cannot certify

@@ -67,6 +67,7 @@
 #include "../common/vfm/vfm.h"
 #include <linux/amlogic/media/amdolbyvision/dolby_vision.h>
 #include "video_receiver.h"
+#include "video_tear_trace.h"
 #ifdef CONFIG_AMLOGIC_MEDIA_LUT_DMA
 #include <linux/amlogic/media/lut_dma/lut_dma.h>
 #endif
@@ -5366,6 +5367,14 @@ int set_layer_display_canvas(
 	if (vf->canvas0Addr == 0)
 		update_mif = false;
 
+	if (unlikely(tear_trace_on) && layer_id == 0)
+		tear_trace_frame(update_mif,
+				 !glayer_info[layer_id].need_no_compress &&
+				 (vf->type & VIDTYPE_COMPRESS),
+				 vd_mif_reg->vd_if0_canvas0,
+				 layer->disp_canvas[cur_canvas_id][0],
+				 layer->disp_canvas[cur_canvas_id ? 0 : 1][0]);
+
 	if (update_mif) {
 		if (vf->canvas0Addr != (u32)-1) {
 			canvas_copy(
@@ -5447,6 +5456,10 @@ int set_layer_display_canvas(
 					layer->disp_canvas[cur_canvas_id][1]);
 			}
 		}
+		if (unlikely(tear_trace_on) && layer_id == 0)
+			tear_trace_queued(vd_mif_reg->vd_if0_canvas0,
+					  VSYNC_RD_MPEG_REG(
+						vd_mif_reg->vd_if0_canvas0));
 #ifdef CONFIG_AMLOGIC_MEDIA_VSYNC_RDMA
 		layer->next_canvas_id = layer->cur_canvas_id ? 0 : 1;
 #endif

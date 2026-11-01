@@ -31,6 +31,8 @@
 #include <linux/amlogic/media/canvas/canvas_mgr.h>
 
 #include <linux/of_address.h>
+#include <linux/bitmap.h>
+#include <linux/moduleparam.h>
 #include "canvas_reg.h"
 #include "canvas_priv.h"
 
@@ -57,6 +59,27 @@ struct canvas_device_info {
 	ulong fiq_flag;
 };
 static struct canvas_device_info canvas_info;
+
+/*
+ * Decoders rewrite the canvas entries of all their buffers on every decode
+ * run with unchanged values. With skip_same set, a write that would leave
+ * the hardware entry as it is (same data, entry known to be written since
+ * the last resume) is skipped. 0 writes every time, as before.
+ */
+static unsigned int skip_same = 1;
+module_param(skip_same, uint, 0664);
+MODULE_PARM_DESC(skip_same, "skip canvas LUT writes that change nothing");
+
+/* entries whose dataL/dataH match the hardware LUT; under info->lock */
+static DECLARE_BITMAP(canvas_hw_valid, CANVAS_MAX_NUM);
+
+static void (*canvas_write_trace)(u32 index, bool same, bool written);
+
+void canvas_set_write_trace(void (*fn)(u32 index, bool same, bool written))
+{
+	WRITE_ONCE(canvas_write_trace, fn);
+}
+EXPORT_SYMBOL(canvas_set_write_trace);
 
 #define CANVAS_VALID(n) ((n) < canvas_pool_canvas_num())
 
@@ -155,8 +178,10 @@ static void canvas_lut_data_parser(struct canvas_s *canvas, u32 data_l,
 static void canvas_config_locked(u32 index, struct canvas_s *p)
 {
 	struct canvas_device_info *info = &canvas_info;
+	void (*trace)(u32 index, bool same, bool written);
 	u32 datal, datah;
 	u32 reg_add = 0;
+	bool same;
 
 	canvas_lut_data_build(p->addr,
 			p->width,
@@ -164,6 +189,14 @@ static void canvas_config_locked(u32 index, struct canvas_s *p)
 			p->wrap,
 			p->blkmode,
 			p->endian, &datal, &datah);
+
+	same = index < CANVAS_MAX_NUM && test_bit(index, canvas_hw_valid) &&
+		p->dataL == datal && p->dataH == datah;
+	trace = READ_ONCE(canvas_write_trace);
+	if (trace)
+		trace(index, same, !(same && skip_same));
+	if (same && skip_same)
+		return;
 
 	if ((get_cpu_type() == MESON_CPU_MAJOR_ID_M8M2) ||
 		(get_cpu_type() >= MESON_CPU_MAJOR_ID_GXBB))
@@ -180,7 +213,8 @@ static void canvas_config_locked(u32 index, struct canvas_s *p)
 
 	p->dataL = datal;
 	p->dataH = datah;
-
+	if (index < CANVAS_MAX_NUM)
+		set_bit(index, canvas_hw_valid);
 }
 
 int canvas_read_hw(u32 index, struct canvas_s *canvas)
@@ -295,8 +329,9 @@ void canvas_copy(u32 src, u32 dst)
 	canvas_dst->wrap = canvas_src->wrap;
 	canvas_dst->blkmode = canvas_src->blkmode;
 	canvas_dst->endian = canvas_src->endian;
-	canvas_dst->dataH = canvas_src->dataH;
-	canvas_dst->dataL = canvas_src->dataL;
+	/* dataL/dataH stay the record of dst's hardware entry; the write
+	 * below rebuilds them from the fields copied above
+	 */
 	canvas_config_locked(dst, canvas_dst);
 	canvas_unlock(info, flags, fiqflags);
 }
@@ -417,6 +452,23 @@ static int canvas_remove(struct platform_device *pdev)
 	return 0;
 }
 
+/* The LUT may not survive suspend: write every entry again after resume. */
+static int canvas_resume(struct device *dev)
+{
+	struct canvas_device_info *info = &canvas_info;
+	unsigned long flags;
+
+	spin_lock_irqsave(&info->lock, flags);
+	bitmap_zero(canvas_hw_valid, CANVAS_MAX_NUM);
+	spin_unlock_irqrestore(&info->lock, flags);
+	return 0;
+}
+
+static const struct dev_pm_ops canvas_pm_ops = {
+	.resume = canvas_resume,
+	.restore = canvas_resume,
+};
+
 static const struct of_device_id canvas_dt_match[] = {
 	{
 			.compatible = "amlogic, meson, canvas",
@@ -430,6 +482,7 @@ static struct platform_driver canvas_driver = {
 	.driver = {
 			.name = "amlogic-canvas",
 			.of_match_table = canvas_dt_match,
+			.pm = &canvas_pm_ops,
 		},
 };
 
